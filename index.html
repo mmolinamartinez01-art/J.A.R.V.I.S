@@ -230,8 +230,6 @@ async function getModel(){
   return v || 'gemini-3.8-flash';
 }
 try { const m = localStorage.getItem('jarvis_model'); if (m) $('mdl').value = m; } catch {}
-  return modelId;
-}
 async function ask(text){
   setMode('thinking'); show(text, '…');
   try{
