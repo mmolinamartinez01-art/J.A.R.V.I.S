@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J.A.R.V.I.S. HUD</title>
+<style>
+  :root { --c:#ffb347; --c2:#ff7a18; --bg:#02030a; --dim:rgba(255,179,71,.55); }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--c); font:12px/1.4 ui-monospace,Menlo,Consolas,monospace; overflow:hidden; }
+  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  .hud { position:fixed; inset:0; pointer-events:none; padding:18px 22px; display:flex; flex-direction:column; justify-content:space-between; letter-spacing:.14em; text-transform:uppercase; }
+  .row { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
+  .title { font-size:15px; color:var(--c); text-shadow:0 0 10px var(--c2); }
+  .meta { color:var(--dim); text-align:right; }
+  .state { font-size:13px; }
+  .transcript { position:fixed; left:50%; bottom:92px; transform:translateX(-50%); width:min(760px,90vw); text-align:center; font-size:15px; letter-spacing:.06em; text-transform:none; min-height:44px; text-shadow:0 0 12px var(--c2); }
+  .transcript .you { color:var(--dim); display:block; font-size:12px; }
+  .controls { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); display:flex; gap:10px; pointer-events:auto; flex-wrap:wrap; justify-content:center; }
+  button, input { background:rgba(255,140,30,.08); color:var(--c); border:1px solid var(--dim); padding:9px 16px; font:inherit; letter-spacing:.14em; text-transform:uppercase; cursor:pointer; }
+  input { text-transform:none; letter-spacing:.04em; cursor:text; width:230px; }
+  button:hover { background:rgba(255,140,30,.22); box-shadow:0 0 14px rgba(255,140,30,.4); }
+  button.on { background:rgba(255,140,30,.3); box-shadow:0 0 18px rgba(255,140,30,.6); }
+  @media (max-width:640px){ .meta{display:none} input{width:100%} }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  <div class="row">
+    <div><div class="title">J.A.R.V.I.S.</div><div class="state" id="state">En espera</div></div>
+    <div class="meta">Nivel <span id="lvl">00</span><br>Voz <span id="vs">—</span></div>
+  </div>
+</div>
+<div class="transcript" id="tx"></div>
+<div class="controls">
+  <button id="mic">Activar micrófono</button>
+  <input id="api" value="http://localhost:8000" title="URL del servidor OpenJarvis (jarvis serve)">
+  <button id="demo">Demo</button>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+let W, H, DPR;
+function resize(){ DPR = Math.min(devicePixelRatio||1, 2); W = cv.width = innerWidth*DPR; H = cv.height = innerHeight*DPR; }
+addEventListener('resize', resize); resize();
+
+/* ---------- Audio level: smoothed energy from mic or TTS playback ---------- */
+let AC, micAn, micData, ttsAn, ttsData, micOn = false, demo = false;
+let level = 0, target = 0, bands = new Float32Array(64), mode = 'idle'; // idle|listening|thinking|speaking
+function energy(an, data){
+  an.getByteFrequencyData(data);
+  let s = 0; const n = Math.min(data.length, 64);
+  for (let i=0;i<n;i++){ const v = data[i]/255; bands[i] += (v - bands[i])*.35; s += v; }
+  return s/n;
+}
+function audioTick(t){
+  let e = 0;
+  if (mode==='speaking' && ttsAn) e = energy(ttsAn, ttsData)*2.4;
+  else if (micOn && micAn) e = energy(micAn, micData)*3.2;
+  else if (demo) { e = (Math.sin(t/230)*.5+.5) * (Math.sin(t/1300)*.5+.5) * .9 + Math.random()*.08;
+                   for (let i=0;i<64;i++) bands[i] += ((Math.sin(t/160+i*.5)*.5+.5)*e - bands[i])*.3; }
+  else for (let i=0;i<64;i++) bands[i] *= .9;
+  target = Math.min(1, e);
+  level += (target - level) * (target > level ? .35 : .08);
+}
+
+/* ---------- Scene ---------- */
+const N = 520, pts = [];
+for (let i=0;i<N;i++){ // fibonacci sphere
+  const y = 1 - (i/(N-1))*2, r = Math.sqrt(1-y*y), th = i*2.399963;
+  pts.push({x:Math.cos(th)*r, y, z:Math.sin(th)*r, ph:Math.random()*6.28});
+}
+const rings = [
+  {r:1.55, tilt:1.25, rot:0, sp:.12, ticks:90, w:2},
+  {r:1.9,  tilt:.35,  rot:1, sp:-.08, ticks:60, w:1},
+  {r:2.25, tilt:1.0,  rot:2, sp:.05, ticks:120, w:1},
+];
+const arcs = Array.from({length:4}, (_,i)=>({r:1.7+i*.18, a:Math.random()*6.28, len:.8+Math.random()*1.2, sp:(Math.random()-.5)*.9, tilt:.3+i*.35}));
+const sparks = Array.from({length:140}, ()=>({a:Math.random()*6.28, r:1.2+Math.random()*1.5, z:Math.random()*2-1, sp:(Math.random()-.5)*.4}));
+
+function proj(x,y,z,ax,ay,s,cx,cy){
+  let c=Math.cos(ay), sn=Math.sin(ay); let x1=x*c+z*sn, z1=-x*sn+z*c;
+  c=Math.cos(ax); sn=Math.sin(ax); let y1=y*c-z1*sn, z2=y*sn+z1*c;
+  const p = 1/(1 - z2*.18);
+  return [cx+x1*s*p, cy+y1*s*p, z2, p];
+}
+
+let T0 = performance.now();
+function frame(now){
+  const t = now - T0, tt = t/1000;
+  audioTick(t);
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.globalCompositeOperation='source-over';
+  ctx.fillStyle='rgba(2,3,10,.32)'; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation='lighter';
+
+  const cx=W/2, cy=H/2-20*DPR, base=Math.min(W,H)*.19;
+  const L = level, pulse = 1 + L*.22 + Math.sin(tt*1.6)*.015;
+  const spin = tt*(.25 + L*1.6);
+  const s = base*pulse;
+
+  // core glow
+  const g = ctx.createRadialGradient(cx,cy,0,cx,cy,s*1.35);
+  g.addColorStop(0,`rgba(255,240,200,${.95})`);
+  g.addColorStop(.12+.1*L,`rgba(255,190,80,${.85})`);
+  g.addColorStop(.5,`rgba(255,110,20,${.22+.2*L})`);
+  g.addColorStop(1,'rgba(255,90,10,0)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(cx,cy,s*1.35,0,6.283); ctx.fill();
+
+  // particle sphere (radial displacement driven by spectrum bands)
+  for (let i=0;i<N;i++){
+    const p=pts[i], b = bands[i%64];
+    const d = 1 + b*.55*Math.sin(tt*3+p.ph) + L*.18;
+    const [x,y,z,pp] = proj(p.x*d,p.y*d,p.z*d,.45,spin,s*1.05,cx,cy);
+    const a = (.25 + (z+1)*.35) * (.55 + L*.6);
+    ctx.fillStyle=`rgba(255,${160+z*50|0},60,${a})`;
+    const r = (1.1 + (z+1)*.9 + b*2)*DPR*pp;
+    ctx.beginPath(); ctx.arc(x,y,r,0,6.283); ctx.fill();
+  }
+
+  // tick rings
+  for (const R of rings){
+    R.rot += R.sp*(.01 + L*.05);
+    const rr = R.r*(1 + L*.05);
+    for (let i=0;i<R.ticks;i++){
+      const a = i/R.ticks*6.283 + R.rot*60;
+      const bnd = bands[(i*7)%64];
+      const len = .03 + bnd*.18 + (i%5===0?.04:0);
+      const p1 = proj(Math.cos(a)*rr, 0, Math.sin(a)*rr, R.tilt, tt*.15*R.sp*8, s, cx, cy);
+      const p2 = proj(Math.cos(a)*(rr+len), 0, Math.sin(a)*(rr+len), R.tilt, tt*.15*R.sp*8, s, cx, cy);
+      ctx.strokeStyle=`rgba(255,${150+bnd*100|0},60,${.25+.5*bnd+(p1[2]+1)*.12})`;
+      ctx.lineWidth=R.w*DPR; ctx.beginPath(); ctx.moveTo(p1[0],p1[1]); ctx.lineTo(p2[0],p2[1]); ctx.stroke();
+    }
+  }
+
+  // orbiting arcs
+  ctx.lineCap='round';
+  for (const A of arcs){
+    A.a += A.sp*(.01+L*.04);
+    ctx.strokeStyle=`rgba(255,190,90,${.35+L*.5})`; ctx.lineWidth=(1.5+L*2)*DPR;
+    ctx.beginPath();
+    for (let k=0;k<=40;k++){
+      const a = A.a + A.len*k/40;
+      const [x,y] = proj(Math.cos(a)*A.r, 0, Math.sin(a)*A.r, A.tilt, tt*.2, s, cx, cy);
+      k?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    }
+    ctx.stroke();
+  }
+
+  // sparks
+  for (const sp of sparks){
+    sp.a += sp.sp*(.004+L*.03);
+    const [x,y,z] = proj(Math.cos(sp.a)*sp.r*(1+L*.2), sp.z*.9, Math.sin(sp.a)*sp.r*(1+L*.2), .6, tt*.1, s, cx, cy);
+    ctx.fillStyle=`rgba(255,220,160,${.2+(z+1)*.3})`;
+    ctx.fillRect(x,y,1.6*DPR,1.6*DPR);
+  }
+
+  // outer circular spectrum
+  ctx.lineWidth=2*DPR;
+  const Ro = s*2.3;
+  for (let i=0;i<128;i++){
+    const a = i/128*6.283 - 1.5708, b = bands[i<64?i:127-i];
+    const l = (4 + b*40)*DPR;
+    ctx.strokeStyle=`rgba(255,${130+b*110|0},40,${.2+b*.7})`;
+    ctx.beginPath(); ctx.moveTo(cx+Math.cos(a)*Ro, cy+Math.sin(a)*Ro);
+    ctx.lineTo(cx+Math.cos(a)*(Ro+l), cy+Math.sin(a)*(Ro+l)); ctx.stroke();
+  }
+  ctx.strokeStyle='rgba(255,170,70,.25)'; ctx.lineWidth=1*DPR;
+  ctx.beginPath(); ctx.arc(cx,cy,Ro-6*DPR,0,6.283); ctx.stroke();
+
+  $('lvl').textContent = String(Math.round(L*99)).padStart(2,'0');
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---------- UI state ---------- */
+const STATES = {idle:'En espera', listening:'Escuchando', thinking:'Procesando', speaking:'Respondiendo'};
+function setMode(m){ mode = m; $('state').textContent = STATES[m]; }
+function show(you, jarvis){ $('tx').innerHTML = (you?`<span class="you">${esc(you)}</span>`:'') + esc(jarvis||''); }
+function esc(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+/* ---------- Microphone + speech recognition ---------- */
+async function ensureAC(){ if(!AC) AC = new (window.AudioContext||window.webkitAudioContext)(); if(AC.state==='suspended') AC.resume().catch(()=>{}); }
+let stream, rec, userStopped = false;
+$('mic').onclick = async () => {
+  if (micOn){ userStopped = true; stopMic(); return; }
+  userStopped = false;
+  try{
+    await ensureAC();
+    stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true}});
+    micAn = AC.createAnalyser(); micAn.fftSize = 256; micAn.smoothingTimeConstant = .6;
+    micData = new Uint8Array(micAn.frequencyBinCount);
+    AC.createMediaStreamSource(stream).connect(micAn);
+    micOn = true; demo = false; $('demo').classList.remove('on');
+    $('mic').textContent='Desactivar micrófono'; $('mic').classList.add('on'); setMode('listening');
+    startRec();
+  }catch(e){ show('', 'No se pudo acceder al micrófono: '+e.message); }
+};
+function stopMic(){
+  micOn=false; stream&&stream.getTracks().forEach(t=>t.stop()); try{rec&&rec.stop();}catch{}
+  $('mic').textContent='Activar micrófono'; $('mic').classList.remove('on'); setMode('idle');
+}
+function startRec(){
+  const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){ $('vs').textContent='sin STT'; return; }
+  rec = new SR(); rec.lang='es-ES'; rec.continuous=true; rec.interimResults=true;
+  rec.onresult = ev => {
+    let interim='', fin='';
+    for (let i=ev.resultIndex;i<ev.results.length;i++){ const r=ev.results[i]; (r.isFinal?fin+=r[0].transcript:interim+=r[0].transcript); }
+    if (mode==='listening') show('', interim||fin);
+    if (fin.trim() && mode==='listening') ask(fin.trim());
+  };
+  rec.onend = () => { if (micOn) setTimeout(()=>{ try{rec.start();}catch{} }, 250); };
+  rec.onerror = e => { $('vs').textContent = e.error; };
+  try{ rec.start(); $('vs').textContent='activa'; }catch{}
+}
+
+/* ---------- Talk to OpenJarvis server ---------- */
+const base = () => $('api').value.replace(/\/$/,'');
+async function ask(text){
+  setMode('thinking'); show(text, '…');
+  try{
+    const r = await fetch(base()+'/v1/chat/completions', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({model:'default', messages:[{role:'user', content:text}], stream:false})});
+    if(!r.ok) throw new Error('chat HTTP '+r.status);
+    const j = await r.json(); const ans = j.choices?.[0]?.message?.content || '(sin respuesta)';
+    show(text, ans); await speak(ans);
+  }catch(e){ show(text, 'Error: '+e.message); }
+  if (micOn) setMode('listening'); else setMode('idle');
+}
+async function speak(text){
+  const r = await fetch(base()+'/v1/speech/synthesize', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({text})});
+  if(!r.ok) throw new Error('tts HTTP '+r.status);
+  const blob = await r.blob(); await ensureAC();
+  const audio = new Audio(URL.createObjectURL(blob));
+  const src = AC.createMediaElementSource(audio);
+  ttsAn = AC.createAnalyser(); ttsAn.fftSize=256; ttsAn.smoothingTimeConstant=.6; ttsData = new Uint8Array(ttsAn.frequencyBinCount);
+  src.connect(ttsAn); ttsAn.connect(AC.destination);
+  setMode('speaking');
+  await new Promise(res => { audio.onended = res; audio.onerror = res; audio.play(); });
+}
+
+$('demo').onclick = () => { demo = !demo; $('demo').classList.toggle('on', demo); if(demo){ stopMic(); setMode('listening'); } else setMode('idle'); };
+
+/* ---------- Always-on: arranca solo, se recupera y no deja dormir la pantalla ---------- */
+const autoStart = () => { if (!micOn && !userStopped && !demo) $('mic').click(); };
+addEventListener('load', () => setTimeout(autoStart, 300));
+// Los navegadores exigen un gesto para activar el audio: cualquier toque/tecla lo desbloquea.
+['pointerdown','keydown'].forEach(ev => addEventListener(ev, () => {
+  if (AC && AC.state==='suspended') AC.resume().catch(()=>{});
+  if (!micOn && !userStopped && !demo && !(ev==='pointerdown' && event.target.closest('.controls'))) autoStart();
+}));
+setInterval(() => { if (micOn && stream && !stream.active) { micOn=false; autoStart(); } }, 3000);
+let wl; async function keepAwake(){ try{ wl = await navigator.wakeLock.request('screen'); }catch{} }
+keepAwake(); document.addEventListener('visibilitychange', () => document.visibilityState==='visible' && keepAwake());
+</script>
+</body>
+</html>
