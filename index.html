@@ -36,6 +36,7 @@
 <div class="controls">
   <button id="mic">Activar micrófono</button>
   <input id="api" value="http://localhost:8000" title="URL del servidor OpenJarvis (jarvis serve)">
+  <input id="mdl" value="gemini-3.8-flash" title="Modelo de Gemini" style="width:170px">
   <button id="demo">Demo</button>
   <form id="tf" style="display:flex;gap:10px;width:100%;justify-content:center">
     <input id="txin" placeholder="Escribe a Jarvis y pulsa Enter…" style="width:min(420px,60vw)" autocomplete="off">
@@ -223,14 +224,12 @@ function startRec(){
 
 /* ---------- Talk to OpenJarvis server ---------- */
 const base = () => $('api').value.replace(/\/$/,'');
-let modelId = null;
 async function getModel(){
-  if (modelId) return modelId;
-  try {
-    const j = await (await fetch(base()+'/v1/models')).json();
-    const ids = (j.data||[]).map(m=>m.id);
-    modelId = ids.includes('gemini-2.5-flash') ? 'gemini-2.5-flash' : (ids.find(i=>/gemini/i.test(i)) || ids[0] || 'gemini-2.5-flash');
-  } catch { modelId = 'gemini-2.5-flash'; }
+  const v = $('mdl').value.trim();
+  try { localStorage.setItem('jarvis_model', v); } catch {}
+  return v || 'gemini-3.8-flash';
+}
+try { const m = localStorage.getItem('jarvis_model'); if (m) $('mdl').value = m; } catch {}
   return modelId;
 }
 async function ask(text){
