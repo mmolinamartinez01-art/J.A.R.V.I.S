@@ -16,7 +16,7 @@
   .state { font-size:13px; }
   .transcript { position:fixed; left:50%; bottom:92px; transform:translateX(-50%); width:min(760px,90vw); text-align:center; font-size:15px; letter-spacing:.06em; text-transform:none; min-height:44px; text-shadow:0 0 12px var(--c2); }
   .transcript .you { color:var(--dim); display:block; font-size:12px; }
-  .controls { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); display:flex; gap:10px; pointer-events:auto; flex-wrap:wrap; justify-content:center; }
+  .controls { position:fixed; left:50%; bottom:22px; width:min(960px,96vw); transform:translateX(-50%); display:flex; gap:10px; pointer-events:auto; flex-wrap:wrap; justify-content:center; }
   button, input { background:rgba(255,140,30,.08); color:var(--c); border:1px solid var(--dim); padding:9px 16px; font:inherit; letter-spacing:.14em; text-transform:uppercase; cursor:pointer; }
   input { text-transform:none; letter-spacing:.04em; cursor:text; width:230px; }
   button:hover { background:rgba(255,140,30,.22); box-shadow:0 0 14px rgba(255,140,30,.4); }
@@ -37,6 +37,10 @@
   <button id="mic">Activar micrófono</button>
   <input id="api" value="http://localhost:8000" title="URL del servidor OpenJarvis (jarvis serve)">
   <button id="demo">Demo</button>
+  <form id="tf" style="display:flex;gap:10px;width:100%;justify-content:center">
+    <input id="txin" placeholder="Escribe a Jarvis y pulsa Enter…" style="width:min(420px,60vw)" autocomplete="off">
+    <button type="submit">Enviar</button>
+  </form>
 </div>
 
 <script>
@@ -196,7 +200,7 @@ $('mic').onclick = async () => {
     micOn = true; demo = false; $('demo').classList.remove('on');
     $('mic').textContent='Desactivar micrófono'; $('mic').classList.add('on'); setMode('listening');
     startRec();
-  }catch(e){ show('', 'No se pudo acceder al micrófono: '+e.message); }
+  }catch(e){ userStopped = true; show('', 'Sin micrófono disponible. Puedes escribir abajo o usar Demo.'); }
 };
 function stopMic(){
   micOn=false; stream&&stream.getTracks().forEach(t=>t.stop()); try{rec&&rec.stop();}catch{}
@@ -227,7 +231,7 @@ async function ask(text){
     if(!r.ok) throw new Error('chat HTTP '+r.status);
     const j = await r.json(); const ans = j.choices?.[0]?.message?.content || '(sin respuesta)';
     show(text, ans); await speak(ans);
-  }catch(e){ show(text, 'Error: '+e.message); }
+  }catch(e){ show(text, e instanceof TypeError ? 'No hay conexión con el servidor de OpenJarvis (¿está arrancado en '+base()+'?).' : 'Error: '+e.message); }
   if (micOn) setMode('listening'); else setMode('idle');
 }
 async function speak(text){
@@ -242,6 +246,7 @@ async function speak(text){
   await new Promise(res => { audio.onended = res; audio.onerror = res; audio.play(); });
 }
 
+$('tf').onsubmit = e => { e.preventDefault(); const t = $('txin').value.trim(); if (!t || mode==='thinking' || mode==='speaking') return; $('txin').value=''; ensureAC(); ask(t); };
 $('demo').onclick = () => { demo = !demo; $('demo').classList.toggle('on', demo); if(demo){ stopMic(); setMode('listening'); } else setMode('idle'); };
 
 /* ---------- Always-on: arranca solo, se recupera y no deja dormir la pantalla ---------- */
