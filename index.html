@@ -229,7 +229,7 @@ async function getModel(){
   try {
     const j = await (await fetch(base()+'/v1/models')).json();
     const ids = (j.data||[]).map(m=>m.id);
-    modelId = ids.find(i=>/gemini/i.test(i)) || ids[0] || 'gemini-2.5-flash';
+    modelId = ids.includes('gemini-2.5-flash') ? 'gemini-2.5-flash' : (ids.find(i=>/gemini/i.test(i)) || ids[0] || 'gemini-2.5-flash');
   } catch { modelId = 'gemini-2.5-flash'; }
   return modelId;
 }
